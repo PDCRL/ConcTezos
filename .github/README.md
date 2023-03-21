@@ -1,12 +1,12 @@
-# Tezos Octez GitHub Mirror
+# Tezos Octez IITH
 
-This is the GitHub mirror of the Octez Git repository.
+Required Environment: Sandbox (ref:https://tezos.gitlab.io/user/sandbox.html)
 
-The master repository is here: https://gitlab.com/tezos/tezos
+Required Protocol : Alpha 
 
-PLEASE DO NOT SUBMIT PULL REQUESTS OR ISSUES HERE.
 
-Please go to:
 
-- https://gitlab.com/tezos/tezos/issues
-- https://gitlab.com/tezos/tezos/merge_requests
+Changes: tezos/src/lib_validation/block_validation.ml 
+
+
+
