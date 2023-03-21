@@ -12,7 +12,8 @@
   tezos-context-ops
   tezos-shell-services
   tezos-protocol-updater
-  tezos-stdlib-unix)
+  tezos-stdlib-unix
+  tezos-embedded-protocol-alpha)
  (flags
   (:standard)
   -open Tezos_base.TzPervasives

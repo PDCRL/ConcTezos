@@ -57,6 +57,7 @@ let encoding =
   @@ conv
        (fun {shell; proto} -> (shell, proto))
        (fun (shell, proto) -> {shell; proto})
+      (*       (merge_objs shell_header_encoding (obj1 (req "data" Variable.bytes))) *)
        (merge_objs shell_header_encoding (obj1 (req "data" Variable.bytes)))
 
 let bounded_encoding ?max_size () =

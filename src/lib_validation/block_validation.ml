@@ -41,6 +41,8 @@ module Event = struct
       ("hash", Block_hash.encoding)
 end
 
+module Trans_map = Map.Make(struct type t = int let compare = compare end)
+
 type validation_store = {
   context_hash : Context_hash.t;
   timestamp : Time.Protocol.t;
@@ -269,6 +271,7 @@ let may_patch_protocol ~user_activated_upgrades
       return {validation_result with context}
 
 module Make (Proto : Registered_protocol.T) = struct
+  
   type 'operation_data preapplied_operation = {
     hash : Operation_hash.t;
     raw : Operation.t;
@@ -388,11 +391,16 @@ module Make (Proto : Registered_protocol.T) = struct
       combined
 
   let parse_operations block_hash operations =
+    
     List.mapi_es
       (fun pass ->
         let open Lwt_result_syntax in
+        
+        
         List.map_es (fun op ->
             let op_hash = Operation.hash op in
+            (* let () = print_string( "######### IITH ") in 
+            let () = (Operation.pp (Format.formatter_of_out_channel stdout) op) in *)
             match
               Data_encoding.Binary.of_bytes_opt
                 Proto.operation_data_encoding
@@ -520,10 +528,127 @@ module Make (Proto : Registered_protocol.T) = struct
      measurement events in proto_apply_operations should not impact
      current benchmarks.
      See https://gitlab.com/tezos/tezos/-/issues/2716 *)
-  let proto_apply_operations chain_id context cache
+  let proto_apply_operations ?(conflict_matrix = Array.make_matrix 0 0 0) chain_id context cache
       (predecessor_block_header : Block_header.t) block_header block_hash
       operations =
+    (*
+    let len = Array.length conflict_matrix.(0) in 
+    let () = print_string(" proto apply function length of the matrix "^string_of_int(len)^"\n") in 
+    *)
+    
+    let temp_len = ref 0 in 
+    if(Array.length conflict_matrix > 0 ) then 
+    (   let () = print_string("\n\n****************Conflict Matrix******************") in
+        Array.iter (fun l -> temp_len := !temp_len + 1; let () = print_string("\n") in Array.iter print_int l; print_string "\t") conflict_matrix;
+        let() = print_string("\n") in
+        flush stdout;
+  
+      (*Making the bins matrix to store the bining transaction*)
+      let no_of_trans = !temp_len in
+      let total_trans_bin = Array.make no_of_trans 0 in
+      let bins = Array.make_matrix no_of_trans no_of_trans (-1) in
+      let curr_ptr = ref 0 in
+      
+      let conflict trans_id = 
+        let i = ref (!curr_ptr -1) in
+        let ret_val = ref !curr_ptr in
+        while(!i>=0) do
+          let j = ref 0 in 
+          ret_val := !i;
+          let last_j = (Array.get total_trans_bin !i) in 
+          while(!j < last_j ) do
+            if( conflict_matrix.(trans_id).(bins.(!i).(!j)) = 1) then
+            (
+              j := (Array.get total_trans_bin !i);
+              ret_val := !i+1;
+              i := -1;
+            )
+            else(
+              j := !j + 1;
+            )
+          done;
+          i := !i -1;
+          done;
+          !ret_val in 
+      (*
+      let conflict trans_id = 
+        let i = ref (!curr_ptr -1) in
+        let ret_val = ref !curr_ptr in
+        while(!i>=0) do
+          let j = ref 0 in 
+          ret_val := !i;
+          while(!j < no_of_trans) do
+            if ( bins.(!i).(!j) = 1) then
+            (	
+              if( conflict_matrix.(trans_id).(!j) = 1) then
+              (
+                j := no_of_trans;
+                ret_val := !i+1;
+                i := -1;
+              )
+              else
+              (
+                j := !j + 1
+              )
+            
+            )	
+            else
+            (
+              j := !j +1 
+            )
+          done;
+          
+          i := !i -1;
+              done;
+              !ret_val
+        in
+      *)
+      (*
+      let add_trans trans_id =  
+        let isconflict = conflict trans_id in
+        if( isconflict =  !curr_ptr) then 
+        (
+          bins.(!curr_ptr).(trans_id) <- 1;
+          curr_ptr := !curr_ptr + 1;		
+        )
+        else
+        (
+          bins.(isconflict).(trans_id) <- 1;
+        )
+      in
+      *)
+      (* This function will check for the conflict and according place the transaction into bins i.e bining approach *)
+      let add_trans (trans_id) =  
+        let isconflict = conflict trans_id in
+        Array.set total_trans_bin isconflict ( (Array.get total_trans_bin isconflict) + 1);
+        if( isconflict =  !curr_ptr) then 
+        (
+          bins.(!curr_ptr).((Array.get total_trans_bin isconflict) -1 ) <- trans_id;
+          curr_ptr := !curr_ptr + 1;		
+        )
+        else
+        (
+          bins.(isconflict).((Array.get total_trans_bin isconflict) -1 ) <- trans_id;
+        )
+        in
+
+      let main = 
+        let k = ref 0 in 
+        while( !k < no_of_trans) do
+          ignore (add_trans !k);
+          k := !k+1;
+          ()
+        done;
+      in 
+
+      let () = print_string("****************Binning Matrix******************") in
+      let _ = main  in 
+      Array.iter (fun l -> let () = print_string("\n") in Array.iter print_int l; print_string "\t") bins ;
+      let _ = print_string("\n\n")in
+      flush stdout;
+    ) ;
     let open Lwt_result_syntax in
+    
     trace
       (invalid_block block_hash Economic_protocol_error)
       (let* state =
@@ -534,6 +659,7 @@ module Make (Proto : Registered_protocol.T) = struct
             ~predecessor:predecessor_block_header.shell
             ~cache [@time.duration_lwt application_beginning])
        in
+       
        let* state, ops_metadata =
          (List.fold_left_es
             (fun (state, acc) ops ->
@@ -585,12 +711,15 @@ module Make (Proto : Registered_protocol.T) = struct
           in
           return (validation_result, NewProto.environment_version)
 
-  let apply ?(simulate = false) ?cached_result chain_id ~cache
+  let apply ?(simulate = false) ?(conflict_matrix= Array.make_matrix 0 0 0) ?cached_result chain_id ~cache
       ~user_activated_upgrades ~user_activated_protocol_overrides
       ~operation_metadata_size_limit ~max_operations_ttl
       ~(predecessor_block_header : Block_header.t)
       ~predecessor_block_metadata_hash ~predecessor_ops_metadata_hash
       ~predecessor_context ~(block_header : Block_header.t) operations =
+    (*
+    let () = print_string("In the apply function:598 line no. \n\n") in
+    *)
     let open Lwt_result_syntax in
     let block_hash = Block_header.hash block_header in
     match cached_result with
@@ -619,17 +748,21 @@ module Make (Proto : Registered_protocol.T) = struct
           Context_hash.equal context_hash result.validation_store.context_hash) ;
         return cached_result
     | Some _ | None ->
+      
         let* () =
           check_block_header ~predecessor_block_header block_hash block_header
         in
         let* block_header = parse_block_header block_hash block_header in
         let* () = check_operation_quota block_hash operations in
         let predecessor_hash = Block_header.hash predecessor_block_header in
+        
         let* operations =
           (parse_operations
              block_hash
              operations [@time.duration_lwt operations_parsing])
         in
+        
+
         let* context =
           prepare_context
             predecessor_block_metadata_hash
@@ -640,6 +773,7 @@ module Make (Proto : Registered_protocol.T) = struct
         in
         let* validation_result, block_metadata, ops_metadata =
           proto_apply_operations
+            ~conflict_matrix
             chain_id
             context
             cache
@@ -759,6 +893,7 @@ module Make (Proto : Registered_protocol.T) = struct
     let* operations = parse_operations block_hash operations in
     let* validation_result, block_metadata, ops_metadata =
       proto_apply_operations
+
         chain_id
         context
         cache
@@ -1248,6 +1383,91 @@ let recompute_metadata chain_id ~predecessor_block_header ~predecessor_context
     ~block_header
     operations
 
+let parse_alpha_operations (operations : Operation.t list list) =
+  
+  let i = ref 0 in
+  let j = ref 0 in 
+  let to_bytes op =
+    Data_encoding.Binary.to_bytes_exn Tezos_base.Operation.encoding op
+  in
+  let of_bytes_to_alpha op_b =
+    Data_encoding.Binary.of_bytes_exn
+      Tezos_protocol_alpha.Protocol.Alpha_context.Operation.encoding
+      op_b
+  in
+  let loc = ref 1 in
+  let temp_array = Array.make 10 (-1,-1, "None", "None" ) in
+  (*
+    let y = Trans_map.empty in  
+  *)
+  let alpha_operations =
+    List.map
+      (fun l ->
+        List.map
+          (fun op ->
+            let op_b = to_bytes op in
+            of_bytes_to_alpha op_b)
+          l)
+      operations
+  in
+  let open Tezos_protocol_alpha.Protocol.Alpha_context in
+  (* Print transaction operations *)
+   
+  List.iter
+    (fun l ->
+      i := !i+1;
+      List.iter
+        (fun (packed_op : packed_operation) ->
+          j:= !j +1 ;
+          let {shell = _; protocol_data = Operation_data data} = packed_op in
+          match data with
+          | {
+            contents =
+              Single
+                (Manager_operation
+                  {source; operation = Transaction {amount; destination; _}; _});
+            _;
+          } ->
+
+              let () = Array.set temp_array  !loc (!i,!j, Signature.Public_key_hash.to_b58check source, Contract.to_b58check destination ) in
+              loc := !loc + 1;
+
+              (*try to print and there was a problem with the map**)
+              (*print_string("value of i , j , loc " ^ string_of_int(!i) ^ " " ^string_of_int(!j)^" "^string_of_int(!loc) );*)
+              (* let y = Trans_map.merge (fun k xo yo -> match xo,yo with
+                | Some x, Some y -> Some (x+y+k)
+                | _ -> None
+              ) y z in *)
+              (Format.printf
+                "Found a transaction operation from %a to %a with an amount \
+                  of %a xtz.@ "
+                Signature.Public_key_hash.pp
+                source
+                Contract.pp
+                destination
+                Tez.pp
+                amount;
+              (*print_string("At index "^ string_of_int(!i) ^" , "^string_of_int(!j)^ "\n"); *))
+          | _ ->
+              (* do nothing *)
+              (*let () = print_string("Lenght of the operation list is "^string_of_int(!i)^"\n") in*)
+              ())
+        
+        l)
+    alpha_operations;
+    (* trying to create a map but due to scope there was a problem
+    let z = ref 1 in
+    while(!z < !loc) do
+      let y = Trans_map.add !z temp_array.(!z ) y  in
+      ()
+    done;
+    *)
+    temp_array
+
+    
+    
+    
+
 let recompute_metadata ~chain_id ~predecessor_block_header ~predecessor_context
     ~predecessor_block_metadata_hash ~predecessor_ops_metadata_hash
     ~block_header ~operations ~cache =
@@ -1270,6 +1490,7 @@ let recompute_metadata ~chain_id ~predecessor_block_header ~predecessor_context
       tzfail (System_error {errno = Unix.error_message errno; fn; msg})
   | (Ok _ | Error _) as res -> Lwt.return res
 
+
 let apply ?simulate ?cached_result
     {
       chain_id;
@@ -1282,6 +1503,7 @@ let apply ?simulate ?cached_result
       predecessor_ops_metadata_hash;
       predecessor_context;
     } ~cache block_hash block_header operations =
+  
   let open Lwt_result_syntax in
   let*! pred_protocol_hash = Context_ops.get_protocol predecessor_context in
   let* (module Proto) =
@@ -1292,9 +1514,99 @@ let apply ?simulate ?cached_result
              {block = block_hash; protocol = pred_protocol_hash})
     | Some p -> return p
   in
+  let no_of_loc = ref 0 in 
+  let mapping_matrix =
+    if Protocol_hash.(Proto.hash = Tezos_protocol_alpha.Protocol.hash) then (
+      (* In case the protocol is Alpha, we can deserialize into
+        concrete alpha operations *)
+        let mapping_matrix = parse_alpha_operations operations in      
+        (* Trying to get the count of the transactions *)
+        let no_trans = ref 0 in 
+        while(!no_trans < 10) do
+          let (row, _ , _, _) = mapping_matrix.(!no_trans) in 
+          if( row != -1)then
+            no_of_loc := !no_of_loc + 1;
+          no_trans:=!no_trans+1
+        done;
+        (*
+        let _ = Trans_map.iter 
+        (fun key tu -> 
+          let () = print_string(" mapping " ^ string_of_int(key))in
+          let (row,col,source,dest) = tu in 
+          let () = Printf.printf "%d %d %S %S \n" row col source dest in
+          ()
+        ) x in
+        *)
+        mapping_matrix
+      )
+      else(
+        let temp = Array.make 0 (0,0,"None","None") in
+        temp
+
+      )    
+              
+  in
+  let conflict_matrix = Array.make_matrix !no_of_loc !no_of_loc 0  in
+  (*
+  This is give the index out of bound because of the second line of the code 
+  let len = Array.length conflict_matrix.(0) in 
+  let () = print_string(" length of the matrix "^string_of_int(len)^"\n") in 
+  let () = print_string("At line no 1363 \n") in
+  *)
+  
+
+  
+  let () = 
+  if(!no_of_loc > 0 ) then (
+    let row = ref (-1) in  
+    let set (m: 'a array array) (r: int) (c:int) (v: 'a) : unit =
+      m.(r).(c) <- v in
+    let () =
+      Array.iter 
+      (fun l -> 
+        row := !row + 1;
+        let (_,_,source,dest) = mapping_matrix.(!row +1) in
+        let col = ref (-1) in
+        Array.iter (fun _ -> 
+          col := !col + 1;
+          let () = if( ((!row) != ((!col))) )then(
+            let (_,_, curr_s, curr_des ) = mapping_matrix.(!col +1) in
+            let () = if( (source = curr_s) || (source = curr_des) || (dest = curr_des) || (dest = curr_s) )  then 
+              set conflict_matrix (!row) (!col) 1 in 
+            ()
+          ) in
+        ())
+        l
+      ) 
+      conflict_matrix in
+      ()
+    ) in
+    (*
+    let () = print_string("\n") in
+    *)
+    (*
+    For printing the mapping matrix
+    let print_arr_el tu = 
+      let (r, c , source , dest) = tu in 
+      print_int(r);
+      print_string(" " );
+      print_int(c);
+      print_string(source);
+      print_string(dest);
+    in
+    let () =
+    Array.iter (fun l -> print_arr_el l) mapping_matrix in *)
+    
+    (*
+    Printing the conflict matrix
+    let () =
+    Array.iter (fun l -> let () = print_string("\n") in Array.iter print_int l) conflict_matrix in 
+    *)
   let module Block_validation = Make (Proto) in
+  
   Block_validation.apply
     ?simulate
+    ~conflict_matrix
     ?cached_result
     chain_id
     ~user_activated_upgrades
@@ -1312,6 +1624,9 @@ let apply ?simulate ?cached_result
 let apply ?simulate ?cached_result c ~cache block_header operations =
   let open Lwt_result_syntax in
   let block_hash = Block_header.hash block_header in
+  (*
+  let () = print_string("At line no 1383 \n") in
+  *)
   let*! r =
     (* The cache might be inconsistent with the context. By forcing
        the reloading of the cache, we restore the consistency. *)
